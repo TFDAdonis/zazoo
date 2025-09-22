@@ -10,11 +10,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
+import time
 import ee
 from earth_engine_utils import initialize_earth_engine, get_admin_boundaries, get_boundary_names
 from vegetation_indices import mask_clouds, add_vegetation_indices
 
-# Custom CSS for professional styling
+# Custom CSS for professional styling with enhanced color coding
 st.markdown("""
 <style>
     /* Rose-Blue Theme Variables */
@@ -38,6 +39,10 @@ st.markdown("""
         --accent-secondary: #22c55e;
         --accent-warning: #f59e0b;
         --accent-danger: #ef4444;
+        --water-color: #1e90ff;
+        --vegetation-color: #22c55e;
+        --soil-color: #d97706;
+        --salinity-color: #8b5cf6;
         --gradient-primary: linear-gradient(90deg, var(--rose-primary) 0%, var(--blue-primary) 100%);
         --gradient-secondary: linear-gradient(90deg, var(--rose-secondary) 0%, var(--blue-secondary) 100%);
     }
@@ -297,6 +302,91 @@ st.markdown("""
         animation: float 6s ease-in-out infinite;
     }
     
+    /* Loading animation */
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 3rem;
+        background: var(--bg-secondary);
+        border-radius: 10px;
+        margin: 2rem 0;
+    }
+    
+    .loading-spinner {
+        width: 60px;
+        height: 60px;
+        border: 5px solid rgba(59, 130, 246, 0.3);
+        border-radius: 50%;
+        border-top-color: var(--blue-secondary);
+        animation: spin 1s ease-in-out infinite;
+        margin-bottom: 1rem;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .loading-text {
+        color: var(--text-secondary);
+        font-size: 1.1rem;
+        text-align: center;
+    }
+    
+    .loading-dots:after {
+        content: '';
+        animation: dots 1.5s steps(5, end) infinite;
+    }
+    
+    @keyframes dots {
+        0%, 20% { content: '.'; }
+        40% { content: '..'; }
+        60% { content: '...'; }
+        80%, 100% { content: ''; }
+    }
+    
+    /* Flag styling */
+    .flag-icon {
+        display: inline-block;
+        width: 20px;
+        height: 15px;
+        margin-right: 8px;
+        vertical-align: middle;
+        border-radius: 2px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    
+    /* Map container styling */
+    .map-container {
+        border: 3px solid var(--accent-primary);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        margin-bottom: 1rem;
+    }
+    
+    /* Index color coding */
+    .index-water {
+        color: var(--water-color);
+        font-weight: 600;
+    }
+    
+    .index-vegetation {
+        color: var(--vegetation-color);
+        font-weight: 600;
+    }
+    
+    .index-soil {
+        color: var(--soil-color);
+        font-weight: 600;
+    }
+    
+    .index-salinity {
+        color: var(--salinity-color);
+        font-weight: 600;
+    }
+    
     /* Responsive adjustments */
     @media (max-width: 768px) {
         .main-title {
@@ -338,6 +428,84 @@ if 'selected_geometry' not in st.session_state:
     st.session_state.selected_geometry = None
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
+if 'loading' not in st.session_state:
+    st.session_state.loading = False
+
+# Country flag mapping (simplified for demo)
+COUNTRY_FLAGS = {
+    "United States": "🇺🇸",
+    "Canada": "🇨🇦",
+    "United Kingdom": "🇬🇧",
+    "France": "🇫🇷",
+    "Germany": "🇩🇪",
+    "Italy": "🇮🇹",
+    "Spain": "🇪🇸",
+    "Australia": "🇦🇺",
+    "Japan": "🇯🇵",
+    "China": "🇨🇳",
+    "India": "🇮🇳",
+    "Brazil": "🇧🇷",
+    "Mexico": "🇲🇽",
+    "South Africa": "🇿🇦",
+    "Egypt": "🇪🇬",
+    "Nigeria": "🇳🇬",
+    "Kenya": "🇰🇪",
+    "Algeria": "🇩🇿",
+    "Morocco": "🇲🇦",
+    "Tunisia": "🇹🇳",
+    "Saudi Arabia": "🇸🇦",
+    "United Arab Emirates": "🇦🇪",
+    "Turkey": "🇹🇷",
+    "Russia": "🇷🇺",
+    "Argentina": "🇦🇷",
+    "Chile": "🇨🇱",
+    "Colombia": "🇨🇴",
+    "Peru": "🇵🇪",
+    "Venezuela": "🇻🇪",
+    "Pakistan": "🇵🇰",
+    "Bangladesh": "🇧🇩",
+    "Indonesia": "🇮🇩",
+    "Thailand": "🇹🇭",
+    "Vietnam": "🇻🇳",
+    "Philippines": "🇵🇭",
+    "Malaysia": "🇲🇾",
+    "Singapore": "🇸🇬",
+    "South Korea": "🇰🇷",
+    "New Zealand": "🇳🇿"
+}
+
+# Index type classification for color coding
+INDEX_TYPES = {
+    'water': ['NDWI', 'MNDWI', 'AWEI', 'WI', 'ANDWI'],
+    'vegetation': ['NDVI', 'ARVI', 'ATSAVI', 'DVI', 'EVI', 'EVI2', 'GNDVI', 'MSAVI', 
+                   'OSAVI', 'RDVI', 'RI', 'RVI', 'SAVI', 'TVI', 'TSAVI', 'VARI', 
+                   'VIN', 'WDRVI', 'GCVI', 'MCARI', 'NDCI', 'PSSRb1', 'SIPI', 'PSRI', 
+                   'Chl_red_edge', 'MARI'],
+    'soil': ['NDTI', 'MSI', 'MTVI', 'MTVI2', 'BRI', 'SSI'],
+    'salinity': ['NDSI', 'nDDI', 'NBR', 'DBSI', 'SI', 'S3', 'NDSI_Salinity', 'SRPI', 'NDMI']
+}
+
+def get_index_color_class(index_name):
+    """Get the CSS class for an index based on its type"""
+    for index_type, indices in INDEX_TYPES.items():
+        if index_name in indices:
+            return f"index-{index_type}"
+    return "index-vegetation"  # Default to vegetation
+
+def fake_loading(message="Processing data"):
+    """Display a fake loading animation"""
+    placeholder = st.empty()
+    with placeholder.container():
+        st.markdown(f"""
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">{message}<span class="loading-dots"></span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Simulate processing time
+    time.sleep(2)
+    placeholder.empty()
 
 # Authentication check
 if not st.session_state.authenticated:
@@ -389,6 +557,7 @@ if not st.session_state.authenticated:
         if st.button("🔓 **ENTER PLATFORM**", type="primary", use_container_width=True):
             if password == "admin":
                 st.session_state.authenticated = True
+                fake_loading("Authenticating user")
                 st.success("✅ Authentication successful! Loading enterprise dashboard...")
                 st.rerun()
             else:
@@ -514,6 +683,7 @@ if not st.session_state.ee_initialized:
                 credentials_path = tmp_file.name
             
             # Initialize Earth Engine
+            fake_loading("Initializing Earth Engine")
             success = initialize_earth_engine(credentials_path)
             
             if success:
@@ -559,16 +729,27 @@ if st.session_state.ee_initialized:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Country selection
+        # Country selection with flags
         try:
             countries_fc = get_admin_boundaries(0)
             if countries_fc is not None:
                 country_names = get_boundary_names(countries_fc, 0)
-                selected_country = st.selectbox(
+                
+                # Add flags to country names
+                country_options = [""] + country_names
+                country_display_options = [""] + [f"{COUNTRY_FLAGS.get(name, '🌐')} {name}" for name in country_names]
+                
+                selected_country_display = st.selectbox(
                     "**Select Country**",
-                    options=[""] + country_names,
+                    options=country_display_options,
                     help="Choose a country for analysis"
                 )
+                
+                # Extract country name from display option
+                if selected_country_display:
+                    selected_country = selected_country_display.split(" ", 1)[1] if " " in selected_country_display else selected_country_display
+                else:
+                    selected_country = ""
             else:
                 st.error("Failed to load countries data")
                 selected_country = ""
@@ -716,9 +897,7 @@ if st.session_state.ee_initialized:
             
             with col1:
                 # Display professional map with enhanced styling
-                st.markdown("""
-                <div style="border: 3px solid var(--accent-primary); border-radius: 10px; padding: 5px; background: var(--bg-secondary);">
-                """, unsafe_allow_html=True)
+                st.markdown('<div class="map-container">', unsafe_allow_html=True)
                 
                 map_data = st_folium(
                     m, 
@@ -728,10 +907,11 @@ if st.session_state.ee_initialized:
                     key="gis_map"
                 )
                 
-                st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
             
             with col2:
                 # Professional GIS information panel
+                flag_emoji = COUNTRY_FLAGS.get(selected_country, "🌐")
                 st.markdown(f"""
                 <div style="background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%); padding: 1.5rem; border-radius: 10px; border: 1px solid var(--accent-primary); height: 500px;">
                     <h4 style="color: var(--accent-primary); margin-top: 0;">🌍 GIS DATA PANEL</h4>
@@ -739,7 +919,7 @@ if st.session_state.ee_initialized:
                     
                     <div style="margin: 1rem 0;">
                         <strong style="color: var(--text-primary);">Study Area:</strong><br>
-                        <span style="color: var(--text-secondary);">{area_name}</span>
+                        <span style="color: var(--text-secondary);">{flag_emoji} {area_name}</span>
                     </div>
                     
                     <div style="margin: 1rem 0;">
@@ -773,7 +953,7 @@ if st.session_state.ee_initialized:
             # Professional status indicator
             st.markdown(f"""
             <div style="text-align: center; background: linear-gradient(90deg, var(--accent-primary) 0%, var(--accent-secondary) 100%); padding: 0.8rem; border-radius: 5px; margin: 1rem 0;">
-                <strong style="color: white;">✅ GIS WORKSPACE ACTIVE</strong> • Study Area: {area_name}
+                <strong style="color: white;">✅ GIS WORKSPACE ACTIVE</strong> • Study Area: {flag_emoji} {area_name}
             </div>
             """, unsafe_allow_html=True)
             
@@ -835,6 +1015,12 @@ if st.session_state.ee_initialized:
             'SSI', 'NDSI_Salinity', 'SRPI', 'MCARI', 'NDCI', 'PSSRb1', 'SIPI', 'PSRI', 'Chl_red_edge', 'MARI', 'NDMI'
         ]
         
+        # Group indices by type for better organization
+        water_indices = [idx for idx in available_indices if idx in INDEX_TYPES['water']]
+        vegetation_indices = [idx for idx in available_indices if idx in INDEX_TYPES['vegetation']]
+        soil_indices = [idx for idx in available_indices if idx in INDEX_TYPES['soil']]
+        salinity_indices = [idx for idx in available_indices if idx in INDEX_TYPES['salinity']]
+        
         col1, col2 = st.columns(2)
         with col1:
             select_all = st.checkbox("**Select All Indices**")
@@ -842,20 +1028,41 @@ if st.session_state.ee_initialized:
             if st.button("**Clear All**"):
                 st.session_state.selected_indices = []
         
-        if select_all:
-            selected_indices = st.multiselect(
-                "**Choose vegetation indices to calculate:**",
-                options=available_indices,
-                default=available_indices,
-                help="Select the vegetation indices you want to analyze"
+        # Create expanders for each index type
+        with st.expander("💧 Water Indices", expanded=True):
+            water_selected = st.multiselect(
+                "Water-related indices:",
+                options=water_indices,
+                default=['NDWI', 'MNDWI'],
+                help="Indices for water body detection and analysis"
             )
-        else:
-            selected_indices = st.multiselect(
-                "**Choose vegetation indices to calculate:**",
-                options=available_indices,
-                default=['NDVI', 'EVI', 'SAVI', 'NDWI'],
-                help="Select the vegetation indices you want to analyze"
+        
+        with st.expander("🌿 Vegetation Indices", expanded=True):
+            vegetation_selected = st.multiselect(
+                "Vegetation indices:",
+                options=vegetation_indices,
+                default=['NDVI', 'EVI', 'SAVI'],
+                help="Indices for vegetation health and density analysis"
             )
+        
+        with st.expander("🌱 Soil Indices", expanded=False):
+            soil_selected = st.multiselect(
+                "Soil indices:",
+                options=soil_indices,
+                default=['NDTI'],
+                help="Indices for soil analysis and moisture content"
+            )
+        
+        with st.expander("🧂 Salinity Indices", expanded=False):
+            salinity_selected = st.multiselect(
+                "Salinity indices:",
+                options=salinity_indices,
+                default=['NDSI'],
+                help="Indices for soil salinity detection"
+            )
+        
+        # Combine all selected indices
+        selected_indices = water_selected + vegetation_selected + soil_selected + salinity_selected
         
         # Run Analysis Button
         if st.button("🚀 **RUN ENTERPRISE ANALYSIS**", type="primary", use_container_width=True):
@@ -863,6 +1070,7 @@ if st.session_state.ee_initialized:
                 st.error("Please select at least one vegetation index")
             else:
                 with st.spinner("Running advanced vegetation indices analysis..."):
+                    fake_loading("Processing satellite imagery")
                     try:
                         # Define collection based on choice
                         if collection_choice == "Sentinel-2":
@@ -953,8 +1161,9 @@ if st.session_state.analysis_results:
         if data['values']:
             values = [v for v in data['values'] if v is not None]
             if values:
+                color_class = get_index_color_class(index)
                 summary_data.append({
-                    'Index': index,
+                    'Index': f'<span class="{color_class}">{index}</span>',
                     'Mean': round(sum(values) / len(values), 4),
                     'Min': round(min(values), 4),
                     'Max': round(max(values), 4),
@@ -962,8 +1171,35 @@ if st.session_state.analysis_results:
                 })
     
     if summary_data:
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, width='stretch', use_container_width=True)
+        # Create HTML table with styled indices
+        html_table = """
+        <table style="width: 100%; border-collapse: collapse; background: var(--bg-secondary); border-radius: 10px; overflow: hidden;">
+            <thead>
+                <tr style="background: var(--bg-tertiary);">
+                    <th style="padding: 12px; text-align: left; color: var(--text-primary);">Index</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Mean</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Min</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Max</th>
+                    <th style="padding: 12px; text-align: center; color: var(--text-primary);">Count</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        
+        for i, row in enumerate(summary_data):
+            bg_color = "var(--bg-secondary)" if i % 2 == 0 else "var(--bg-tertiary)"
+            html_table += f"""
+                <tr style="background: {bg_color};">
+                    <td style="padding: 12px; border-bottom: 1px solid var(--bg-quaternary);">{row['Index']}</td>
+                    <td style="padding: 12px; text-align: center; border-bottom: 1px solid var(--bg-quaternary); color: var(--text-primary);">{row['Mean']}</td>
+                    <td style="padding: 12px; text-align: center; border-bottom: 1px solid var(--bg-quaternary); color: var(--text-primary);">{row['Min']}</td>
+                    <td style="padding: 12px; text-align: center; border-bottom: 1px solid var(--bg-quaternary); color: var(--text-primary);">{row['Max']}</td>
+                    <td style="padding: 12px; text-align: center; border-bottom: 1px solid var(--bg-quaternary); color: var(--text-primary);">{row['Count']}</td>
+                </tr>
+            """
+        
+        html_table += "</tbody></table>"
+        st.markdown(html_table, unsafe_allow_html=True)
     
     # Professional Analytics Charts
     st.markdown("""
@@ -1007,6 +1243,31 @@ if st.session_state.analysis_results:
                         df['MA_10'] = df['Value'].rolling(window=min(10, len(df))).mean()
                         df['Value_Change'] = df['Value'].pct_change()
                         
+                        # Get appropriate color for the index type
+                        index_type_color = {
+                            'water': var(--water-color),
+                            'vegetation': var(--vegetation-color),
+                            'soil': var(--soil-color),
+                            'salinity': var(--salinity-color)
+                        }
+                        
+                        color_class = get_index_color_class(index)
+                        if 'water' in color_class:
+                            line_color = '#1e90ff'
+                            area_color = 'rgba(30, 144, 255, 0.3)'
+                        elif 'vegetation' in color_class:
+                            line_color = '#22c55e'
+                            area_color = 'rgba(34, 197, 94, 0.3)'
+                        elif 'soil' in color_class:
+                            line_color = '#d97706'
+                            area_color = 'rgba(217, 119, 6, 0.3)'
+                        elif 'salinity' in color_class:
+                            line_color = '#8b5cf6'
+                            area_color = 'rgba(139, 92, 246, 0.3)'
+                        else:
+                            line_color = '#00ff88'
+                            area_color = 'rgba(0, 255, 136, 0.3)'
+                        
                         # Create professional analytical chart
                         fig = go.Figure()
                         
@@ -1021,7 +1282,7 @@ if st.session_state.analysis_results:
                                 y=df['Value'],
                                 mode='lines',
                                 name=f'{index} Index',
-                                line=dict(color='#00ff88' if is_increasing else '#ff4444', width=3),
+                                line=dict(color=line_color, width=3),
                                 hovertemplate='<b>%{fullData.name}</b><br>Date: %{x}<br>Value: %{y:.4f}<extra></extra>'
                             ))
                         elif chart_style == "Statistical":
@@ -1044,7 +1305,7 @@ if st.session_state.analysis_results:
                                 mode='lines',
                                 line=dict(width=0),
                                 fill='tonexty',
-                                fillcolor='rgba(0,255,136,0.1)',
+                                fillcolor=area_color,
                                 name='Confidence Band',
                                 hoverinfo='skip'
                             ))
@@ -1054,7 +1315,7 @@ if st.session_state.analysis_results:
                                 y=df['Value'],
                                 mode='lines+markers',
                                 name=f'{index} Index',
-                                line=dict(color='#00ff88', width=2),
+                                line=dict(color=line_color, width=2),
                                 marker=dict(size=4)
                             ))
                         elif chart_style == "Area":
@@ -1064,8 +1325,8 @@ if st.session_state.analysis_results:
                                 fill='tozeroy',
                                 mode='lines',
                                 name=f'{index} Index',
-                                line=dict(color='#00ff88' if is_increasing else '#ff4444', width=2),
-                                fillcolor=f"rgba({'0,255,136' if is_increasing else '255,68,68'}, 0.3)"
+                                line=dict(color=line_color, width=2),
+                                fillcolor=area_color
                             ))
                         
                         # Add moving averages
@@ -1125,7 +1386,7 @@ if st.session_state.analysis_results:
                         
                         # Add trend indicator
                         change_pct = ((current_value - prev_value) / prev_value * 100) if prev_value != 0 else 0
-                        change_color = '#00ff88' if change_pct >= 0 else '#ff4444'
+                        change_color = '#22c55e' if change_pct >= 0 else '#ef4444'
                         change_symbol = '▲' if change_pct >= 0 else '▼'
                         trend_text = "Increasing" if change_pct >= 0 else "Decreasing"
                         
@@ -1133,7 +1394,7 @@ if st.session_state.analysis_results:
                         with col2:
                             st.markdown(f"""
                             <div style="text-align: center; background: var(--bg-secondary); padding: 1rem; border-radius: 10px; margin: 1rem 0;">
-                                <h4 style="color: {change_color}; margin: 0;">{change_symbol} {index} INDEX</h4>
+                                <h4 style="color: {line_color}; margin: 0;">{change_symbol} {index} INDEX</h4>
                                 <h2 style="color: white; margin: 0.5rem 0;">{current_value:.4f}</h2>
                                 <p style="color: {change_color}; margin: 0; font-size: 14px;">{change_pct:+.2f}% • {trend_text}</p>
                             </div>
